@@ -9,6 +9,10 @@
 namespace App\Helpers\Signer;
 
 
+use App\Helpers\Apple\PlistHelper;
+use App\Helpers\Downloader\Command\Executor;
+use CFPropertyList\CFPropertyList;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Finder\Iterator\RecursiveDirectoryIterator;
 
 class CodeSigner
@@ -142,13 +146,133 @@ class CodeSigner
         foreach ($files as $file) {
             $path_parts = pathinfo($file);
             $nameP = $path_parts['basename'];
-            if (str_contains($nameP, "png")) {
+            if (str_contains($nameP, ".png")) {
                 array_push($pngFiles, $path."/".$file);
             }
         }
+        return $pngFiles;
     }
     private function createImportantDirsWithOutputPath($outPutPath) {
         // not implemented yet ;)
+
+        if (file_exists($this->processWorkPath()) == true) {
+            $this->deleteFileAtPath($this->processWorkPath());
+        } else {
+            $this->ensurePathExist($this->processWorkPath());
+        }
+
+        if (file_exists($this->tempPath()) == true) {
+            $this->deleteFileAtPath($this->tempPath());
+        } else {
+            $this->ensurePathExist($this->tempPath());
+        }
+
+        if (file_exists($this->tempIconsPath()) == true) {
+            $this->deleteFileAtPath($this->tempIconsPath());
+        } else {
+            $this->ensurePathExist($this->tempIconsPath());
+        }
+
+        if (file_exists($this->extractedPath()) == true) {
+            $this->deleteFileAtPath($this->extractedPath());
+        } else {
+            $this->ensurePathExist($this->extractedPath());
+        }
+
+        if (file_exists($this->outPutPath) == true) {
+//            $this->deleteFileAtPath($this->outPutPath);
+        } else {
+            $this->ensurePathExist($this->outPutPath);
+        }
     }
+    private function unZipFileToPath($ipaPath, $extractedPath) {
+        $extracted = Executor::execute("$this->unzipCommandPath -oqq $ipaPath -d $extractedPath");
+        if ($extracted['exit_status'] != 0) {
+            Log::error("Failed to unzip ipa file.");
+        }
+    }
+    private function zipFileToPath($ipaOutPutPath) {
+
+        $extractedPath = $this->extractedPath();
+        $appIpaFileName = $this->appName.".ipa";
+
+
+        $extracted = Executor::execute("cd $extractedPath && $this->zipCommandPath $appIpaFileName -qry Payload");
+        if ($extracted['exit_status'] == 0) {
+            $zippedIpaPath = $this->extractedPath()."/".$appIpaFileName;
+            $outPutIpaPath = $ipaOutPutPath."/".$appIpaFileName;
+
+            $extracted = Executor::execute("$this->cpCommandPath $zippedIpaPath $outPutIpaPath");
+            if ($extracted['exit_status'] != 0) {
+                Log::error("Failed to copy ipa file to output folder.");
+            }
+        } else {
+            Log::error("Failed to zip ipa file.");
+        }
+    }
+    private function getCorrectBundleIDFormProfile($profilePath) {
+
+        $codesignEntitlements = $this->defaultEntitlements();
+        $entitlementsPath = PlistHelper::getMainAppEntitlements($profilePath, $codesignEntitlements);
+
+    }
+
+
+    // Private Paths
+    private function processWorkPath() {
+        return $this->outPutPath."/WorkingDir";
+    }
+    private function tempPath() {
+        return $this->processWorkPath()."/Temp";
+    }
+    private function tempIconsPath() {
+        return $this->tempPath()."/Icons";
+    }
+    private function extractedPath() {
+        return $this->tempPath()."/ExtractedPath";
+    }
+    private function payloadAppPath() {
+        return $this->extractedPath()."/Payload";
+    }
+    private function extractedAppBundlePath() {
+        $path = $this->payloadAppPath();
+        $filteredItems = array('..', '.','.DS_Store');
+        $files = array_diff(scandir($path, 1), $filteredItems);
+        $payloadFiles=[];
+        foreach ($files as $file) {
+            $path_parts = pathinfo($file);
+            $nameP = $path_parts['basename'];
+            if (str_contains($nameP, ".png")) {
+                array_push($payloadFiles, $path."/".$file);
+            }
+        }
+        return $path."/".$payloadFiles[0];
+    }
+    private function appPluginPath() {
+        return $this->extractedAppBundlePath()."/PlugIns";
+    }
+    private function appWatchPluginPath() {
+        return $this->extractedAppBundlePath()."/Watch";
+    }
+    private function appFrameworksPath() {
+        return $this->extractedAppBundlePath()."/Frameworks";
+    }
+    private function defaultEntitlements() {
+        return $this->processWorkPath()."/app.entitlements";
+    }
+    private function defaultTempEntitlementsPlist() {
+        return $this->processWorkPath()."/tempEnt.plist";
+    }
+    private function appInfoPlistPath() {
+        return $this->extractedAppBundlePath()."/Info.plist";
+    }
+    private function appInfoPlistDictionary() {
+        $infoPlist = $this->appInfoPlistPath();
+        $plist = new CFPropertyList();
+        $plist->parse($infoPlist);
+        return $plist->toArray();
+
+    }
+
 
 }
